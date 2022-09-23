@@ -8,11 +8,12 @@ import uuid, time, random, string
 from bs4 import BeautifulSoup
 
 session = requests.Session()
-S3S_VERSION = "unknown"
-NSOAPP_VERSION = "2.2.0"
+s3s_version = "unknown"
+nsoapp_version = "2.2.0"
 
 # functions in this file & call stack:
 # get_nsoapp_version()
+# get_web_view_ver()
 # log_in() -> get_session_token()
 # get_gtoken() -> call_imink_api() -> f
 # get_bullet()
@@ -25,6 +26,7 @@ elif __file__:
 	app_path = os.path.dirname(__file__)
 config_path = os.path.join(app_path, "config.txt")
 
+
 def get_nsoapp_version():
 	'''Fetches the current Nintendo Switch Online app version from the Apple App Store.'''
 
@@ -35,14 +37,19 @@ def get_nsoapp_version():
 		ver = elt.get_text().replace("Version ","").strip()
 		return ver
 	except:
-		return NSOAPP_VERSION
+		global nsoapp_version
+		return nsoapp_version
+
+
+def get_web_view_ver(): # TODO
+	pass
 
 
 def log_in(ver):
 	'''Logs in to a Nintendo Account and returns a session_token.'''
 
-	global S3S_VERSION
-	S3S_VERSION = ver
+	global s3s_version
+	s3s_version = ver
 
 	auth_state = base64.urlsafe_b64encode(os.urandom(36))
 
@@ -133,8 +140,8 @@ def get_gtoken(f_gen_url, session_token, ver):
 
 	nsoapp_version = get_nsoapp_version()
 
-	global S3S_VERSION
-	S3S_VERSION = ver
+	global s3s_version
+	s3s_version = ver
 
 	app_head = {
 		'Host':            'accounts.nintendo.com',
@@ -221,35 +228,27 @@ def get_gtoken(f_gen_url, session_token, ver):
 
 	try:
 		idToken = splatoon_token["result"]["webApiServerCredential"]["accessToken"]
-	except:
-		# retry once if 9403/9599 error from nintendo
-		try:
-			f, uuid, timestamp = call_imink_api(idToken, 1, f_gen_url)
-			body["parameter"]["f"]         = f
-			body["parameter"]["requestId"] = uuid
-			body["parameter"]["timestamp"] = timestamp
-			app_head["Content-Length"]     = str(990 + len(f))
-			url = "https://api-lp1.znc.srv.nintendo.net/v3/Account/Login"
-			r = requests.post(url, headers=app_head, json=body)
-			splatoon_token = json.loads(r.text)
-			idToken = splatoon_token["result"]["webApiServerCredential"]["accessToken"]
-		except:
-			print("Error from Nintendo (in Account/Login step):")
-			print(json.dumps(splatoon_token, indent=2))
-			sys.exit(1)
-
 		f, uuid, timestamp = call_imink_api(idToken, 2, f_gen_url)
+	except:
+		print("Error from Nintendo (in Account/Login step):")
+		print(json.dumps(splatoon_token, indent=2))
+		sys.exit(1)
 
 	# get web service token
-	app_head = {
-		'X-Platform':       'Android',
-		'X-ProductVersion': nsoapp_version,
-		'Authorization':    f'Bearer {idToken}',
-		'Content-Type':     'application/json; charset=utf-8',
-		'Content-Length':   '391',
-		'Accept-Encoding':  'gzip',
-		'User-Agent':       'com.nintendo.znca/' + nsoapp_version + '(Android/7.1.2)'
-	}
+	try:
+		app_head = {
+			'X-Platform':       'Android',
+			'X-ProductVersion': nsoapp_version,
+			'Authorization':    f'Bearer {splatoon_token["result"]["webApiServerCredential"]["accessToken"]}',
+			'Content-Type':     'application/json; charset=utf-8',
+			'Content-Length':   '391',
+			'Accept-Encoding':  'gzip',
+			'User-Agent':       'com.nintendo.znca/' + nsoapp_version + '(Android/7.1.2)'
+		}
+	except:
+		print("Error from Nintendo (in Account/Login step):")
+		print(json.dumps(splatoon_token, indent=2))
+		sys.exit(1)
 
 	body = {}
 	parameter = {
@@ -268,20 +267,9 @@ def get_gtoken(f_gen_url, session_token, ver):
 	try:
 		web_service_token = web_service_resp["result"]["accessToken"]
 	except:
-		# retry once if 9403/9599 error from nintendo
-		try:
-			f, uuid, timestamp = call_imink_api(idToken, 2, f_gen_url)
-			body["parameter"]["f"]         = f
-			body["parameter"]["requestId"] = uuid
-			body["parameter"]["timestamp"] = timestamp
-			url = "https://api-lp1.znc.srv.nintendo.net/v2/Game/GetWebServiceToken"
-			r = requests.post(url, headers=app_head, json=body)
-			web_service_resp = json.loads(r.text)
-			web_service_token = web_service_resp["result"]["accessToken"]
-		except:
-			print("Error from Nintendo (in Game/GetWebServiceToken step):")
-			print(json.dumps(web_service_resp, indent=2))
-			sys.exit(1)
+		print("Error from Nintendo (in Game/GetWebServiceToken step):")
+		print(json.dumps(web_service_resp, indent=2))
+		sys.exit(1)
 
 	return web_service_token, user_nickname, user_lang, user_country
 
@@ -332,7 +320,7 @@ def call_imink_api(id_token, step, f_gen_url):
 
 	try:
 		api_head = {
-			'User-Agent':   f's3s/{S3S_VERSION}',
+			'User-Agent':   f's3s/{s3s_version}',
 			'Content-Type': 'application/json; charset=utf-8'
 		}
 		api_body = {
@@ -349,14 +337,12 @@ def call_imink_api(id_token, step, f_gen_url):
 	except:
 		try: # if api_response never gets set
 			if api_response.text:
-				print(f"Error during f generation:\n{json.dumps(json.loads(api_response.text), indent=2, ensure_ascii=False)}")
+				print(u"Error from the imink API:\n{}".format(json.dumps(json.loads(api_response.text), indent=2, ensure_ascii=False)))
 			else:
-				print(f"Error during f generation: Error {api_response.status_code}.")
+				print(f"Error from the imink API: Error {api_response.status_code}.")
 		except:
-			print(f"Couldn't connect to f generation API ({f_gen_url}). Please try again.")
-
+			pass
 		sys.exit(1)
-
 
 def enter_tokens():
 	'''Prompts the user to enter a gtoken and bulletToken.'''
